@@ -3,6 +3,67 @@
 
 import math
 import numpy as np
+# from .evaluate_ate import align
+
+def align(model,data):
+    """Align two trajectories using the method of Horn (closed-form).
+    
+    Input:
+    model -- first trajectory (3xn)
+    data -- second trajectory (3xn)
+    
+    Output:
+    rot -- rotation matrix (3x3)
+    trans -- translation vector (3x1)
+    trans_error -- translational error per point (1xn)
+    
+    """
+    np.set_printoptions(precision=3,suppress=True)
+    model_zerocentered = model - model.mean(1)[..., np.newaxis]
+    data_zerocentered = data - data.mean(1)[..., np.newaxis]
+    
+    W = np.zeros( (3,3) )
+    for column in range(model.shape[1]):
+        W += np.outer(model_zerocentered[:,column],data_zerocentered[:,column])
+    U,d,Vh = np.linalg.linalg.svd(W.transpose())
+    S = np.matrix(np.identity( 3 ))
+    if(np.linalg.det(U) * np.linalg.det(Vh)<0):
+        S[2,2] = -1
+    rot = U*S*Vh
+    # trans = data.mean(1) - rot * model.mean(1)
+    trans = data.mean(1) - model.mean(1) @ rot
+    
+    model_aligned = rot * model + trans
+    alignment_error = model_aligned - data
+    
+    trans_error = np.sqrt(np.sum(np.multiply(alignment_error,alignment_error),0)).A[0]
+        
+    return rot,trans,trans_error
+
+def compute_ate_align(gtruth_file, pred_file):
+    gtruth_list = read_file_list(gtruth_file)
+    pred_list = read_file_list(pred_file)
+    matches = associate(gtruth_list, pred_list, 0, 0.01)
+    if len(matches) < 2:
+        return False
+
+    gtruth_xyz = np.array([[float(value) for value in gtruth_list[a][0:3]] for a,b in matches])
+    pred_xyz = np.array([[float(value) for value in pred_list[b][0:3]] for a,b in matches])
+
+    # rot, trans, trans_error = align(gtruth_xyz.reshape(3,-1), pred_xyz.reshape(3, -1))
+    rot, trans, trans_error = align(gtruth_xyz, pred_xyz)
+
+    # Make sure that the first matched frames align (no need for rotational alignment as
+    # all the predicted/ground-truth snippets have been converted to use the same coordinate
+    # system with the first frame of the snippet being the origin).
+    offset = gtruth_xyz[0] - pred_xyz[0]
+    pred_xyz += offset[None,:]
+
+    # Optimize the scaling factor
+    scale = np.sum(gtruth_xyz * pred_xyz)/np.sum(pred_xyz ** 2)
+    alignment_error = pred_xyz * scale - gtruth_xyz
+    rmse = np.sqrt(np.sum(alignment_error ** 2))/len(matches)
+    return trans_error.mean()
 
 def compute_ate(gtruth_file, pred_file):
     gtruth_list = read_file_list(gtruth_file)
@@ -381,3 +442,6 @@ def dump_pose_seq_TUM(out_file, poses, times):
             rot = this_pose[:3, :3]
             qw, qx, qy, qz = rot2quat(rot)
             f.write('%f %f %f %f %f %f %f %f\n' % (times[p], tx, ty, tz, qx, qy, qz, qw))
+
+if __name__=="__main__":
+    pass
